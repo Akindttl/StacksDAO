@@ -157,6 +157,69 @@
 (define-read-only (get-last-proposal-id)
   (some (var-get last-proposal-id)))
 
+;; Token transfer with extended checks and features
+(define-public (safe-transfer 
+  (amount uint) 
+  (sender principal) 
+  (recipient principal)
+)
+  (begin
+    ;; Validate transfer amount
+    (asserts! (> amount u0) ERR-INVALID-TRANSFER-AMOUNT)
+    (asserts! (<= amount u1000000) ERR-INVALID-TRANSFER-AMOUNT)
+    
+    ;; Check sender balance
+    (asserts! (>= (ft-get-balance governance-token sender) amount) ERR-INSUFFICIENT-BALANCE)
+    
+    ;; Check transfer limits
+    (let 
+      (
+        ;; Get or create transfer limit record
+        (limit-record 
+          (default-to 
+            { 
+              daily-limit: DAILY-TRANSFER-LIMIT, 
+              last-transfer-block: block-height, 
+              total-transferred-today: u0 
+            }
+            (map-get? transfer-limits { user: sender })
+          )
+        )
+        
+        ;; Calculate transfer amount within current period
+        (current-transferred 
+          (if (>= block-height 
+                  (+ (get last-transfer-block limit-record) BLOCKS-PER-DAY))
+              amount
+              (+ amount (get total-transferred-today limit-record))
+          )
+        )
+      )
+      ;; Check if transfer exceeds daily limit
+      (asserts! 
+        (<= current-transferred (get daily-limit limit-record)) 
+        ERR-TRANSFER-LIMIT-EXCEEDED
+      )
+      
+      ;; Update transfer limits
+      (map-set transfer-limits 
+        { user: sender }
+        { 
+          daily-limit: DAILY-TRANSFER-LIMIT, 
+          last-transfer-block: block-height, 
+          total-transferred-today: current-transferred 
+        }
+      )
+    )
+    
+    ;; Perform the transfer
+    (try! (ft-transfer? governance-token amount sender recipient))
+    
+    ;; Additional logging or event emission could be added here
+    (ok true)
+  )
+)
+
 ;; Optional: Function to adjust transfer limits for specific users
 (define-public (set-user-transfer-limit 
   (user principal) 
